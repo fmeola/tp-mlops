@@ -1,0 +1,16 @@
+# macOS
+.DS_STORE
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# Python
+.venv/
+__pycache__/
+
+# mlflow
+mlruns/
+mlartifacts/

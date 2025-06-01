@@ -1,0 +1,12 @@
+###
+GET 127.0.0.1:8000/health
+
+> {%
+    client.test("Request executed successfully", function () {
+        client.assert(response.status === 200, "HTTP status is not 200");
+        client.assert(response.body.status === "ok", "Body status is not OK");
+    });
+%}
+
+###
+GET 127.0.0.1:8000/predict
