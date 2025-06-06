@@ -3,6 +3,8 @@
 import mlflow
 import pandas
 import sklearn
+from sklearn.ensemble import RandomForestRegressor
+import numpy as np
 
 def read_data(name):
     df = pandas.read_csv(
@@ -98,3 +100,175 @@ with mlflow.start_run():
     # Pasajeros reales: 44,042
     # Pasajeros predichos: 24,728
     # MAE: 19,314
+
+# Experimento 2: Predicción de Pasajeros Internacionales con Features de Tiempo y Evaluación en el Futuro
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_experiment("Pasajeros Internacionales - Series de Tiempo")
+
+# %%
+with mlflow.start_run():
+    data = dataset.copy()
+    data = data[data['clasificacion_vuelo'] == 'Internacional']
+
+    # 1. Feature Engineering
+    # Extraemos información de la columna 'indice_tiempo'
+    data['year'] = data['indice_tiempo'].dt.year
+    data['month'] = data['indice_tiempo'].dt.month
+    data['day_of_week'] = data['indice_tiempo'].dt.dayofweek # Lunes=0, Domingo=6
+    data['day_of_year'] = data['indice_tiempo'].dt.dayofyear
+    data['week_of_year'] = data['indice_tiempo'].dt.isocalendar().week.astype(int)
+
+    # 2. División Train/Test para Series de Tiempo
+    fecha_corte_test = pandas.to_datetime("2025-03-31") # Fecha fija para test
+
+    train = data[data['indice_tiempo'] < fecha_corte_test]
+    test = data[data['indice_tiempo'] == fecha_corte_test]
+
+    # Definir características (X) y objetivo (y)
+    features = ['year', 'month', 'day_of_week', 'day_of_year', 'week_of_year'] # Nuevas features
+    target = 'pasajeros'
+
+    X_train = train[features]
+    X_train = X_train.astype('float64')  # Para no obtener el warning de NaN para enteros
+    y_train = train[target]
+    X_test = test[features]
+    X_test = X_test.astype('float64')
+    y_test = test[target]
+
+    # 3. Modelo: Usaremos un Random Forest Regressor
+    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1) # n_jobs=-1 usa todos los cores
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    # 4. Log de Parámetros y Métricas
+    mae = sklearn.metrics.mean_absolute_error(y_test, y_pred)
+
+    mlflow.log_param("model_type", "RandomForestRegressor")
+    mlflow.log_param("n_estimators", model.n_estimators)
+    mlflow.log_param("train_size", len(X_train))
+    mlflow.log_param("test_size", len(X_test))
+    mlflow.log_param("fecha_objetivo", fecha_corte_test.date().isoformat())
+    mlflow.log_param("features_used", str(features))
+    mlflow.log_metric("mae", mae)
+
+    # Calculamos R2
+    if len(y_test) > 1:
+        score = model.score(X_test, y_test)
+        mlflow.log_metric("r2_score", score)
+        print(f"R2: {score:.2f}")
+
+    # Tags
+    mlflow.set_tags({
+        "data_split_strategy": "time_series_split",
+        "model_complexity": "medium",
+        "target_variable": "pasajeros"
+    })
+
+    # Log del modelo
+    signature = mlflow.models.infer_signature(X_train, model.predict(X_train))
+    input_example = X_train.iloc[:5]
+    mlflow.sklearn.log_model(
+        sk_model=model,
+        artifact_path="modelo_rf_dia",
+        input_example=input_example,
+        signature=signature
+    )
+    model_uri = f"runs:/{mlflow.active_run().info.run_id}/modelo_rf_dia"
+    result = mlflow.register_model(model_uri, "modelo_rf_dia")
+
+    # Impresión de resultados
+    print(f"Fecha real: {test['indice_tiempo'].iloc[0].date()}")
+    print(f"Pasajeros Reales: {y_test.iloc[0]:,.0f}")
+    print(f"Pasajeros Predichos: {y_pred[0]:,.0f}")
+    print(f"MAE: {mae:,.0f}")
+    # Fecha real: 2025-03-31
+    # Pasajeros reales: 44,042
+    # Pasajeros predichos: 44,404
+    # MAE: 362
+
+# Experimento 3: Predicción de Pasajeros Internacionales con Features de Tiempo y Evaluación en el Futuro (3 meses)
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_experiment("Pasajeros Internacionales - Series de Tiempo (3 meses)")
+
+# %%
+with mlflow.start_run():
+    data = dataset.copy()
+    data = data[data['clasificacion_vuelo'] == 'Internacional']
+
+    # 1. Feature Engineering
+    # Extraemos información de la columna 'indice_tiempo'
+    data['year'] = data['indice_tiempo'].dt.year
+    data['month'] = data['indice_tiempo'].dt.month
+    data['day_of_week'] = data['indice_tiempo'].dt.dayofweek # Lunes=0, Domingo=6
+    data['day_of_year'] = data['indice_tiempo'].dt.dayofyear
+    data['week_of_year'] = data['indice_tiempo'].dt.isocalendar().week.astype(int)
+
+    # 2. División Train/Test para Series de Tiempo
+    fecha_corte_test = data['indice_tiempo'].max() - pandas.DateOffset(months=3) # Últimos 3 meses para test
+
+    train = data[data['indice_tiempo'] < fecha_corte_test]
+    test = data[data['indice_tiempo'] >= fecha_corte_test]
+
+    # Definir características (X) y objetivo (y)
+    features = ['year', 'month', 'day_of_week', 'day_of_year', 'week_of_year']
+    target = 'pasajeros'
+
+    X_train = train[features]
+    X_train = X_train.astype('float64')
+    y_train = train[target]
+    X_test = test[features]
+    X_test = X_test.astype('float64')
+    y_test = test[target]
+
+    # 3. Modelo: Random Forest Regressor
+    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    # 4. Log de Parámetros y Métricas
+    mae = sklearn.metrics.mean_absolute_error(y_test, y_pred)
+
+    mlflow.log_param("model_type", "RandomForestRegressor")
+    mlflow.log_param("n_estimators", model.n_estimators)
+    mlflow.log_param("train_size", len(X_train))
+    mlflow.log_param("test_size", len(X_test))
+    mlflow.log_param("fecha_objetivo", fecha_corte_test.date().isoformat())
+    mlflow.log_param("features_used", str(features))
+    mlflow.log_metric("mae", mae)
+
+    # Calculamos R2
+    if len(y_test) > 1:
+        score = model.score(X_test, y_test)
+        mlflow.log_metric("r2_score", score)
+        print(f"R2: {score:.2f}")
+
+    # Tags
+    mlflow.set_tags({
+        "data_split_strategy": "time_series_split",
+        "model_complexity": "medium",
+        "target_variable": "pasajeros"
+    })
+
+    # Log del modelo
+    signature = mlflow.models.infer_signature(X_train, model.predict(X_train))
+    input_example = X_train.iloc[:5]
+    mlflow.sklearn.log_model(
+        sk_model=model,
+        artifact_path="modelo_rf_3meses",
+        input_example=input_example,
+        signature=signature
+    )
+    model_uri = f"runs:/{mlflow.active_run().info.run_id}/modelo_rf_3meses"
+    result = mlflow.register_model(model_uri, "modelo_rf_3meses")
+
+    # Impresión de resultados
+    print(f"Fecha real: {test['indice_tiempo'].iloc[0].date()}")
+    print(f"Pasajeros Reales: {y_test.iloc[0]:,.0f}")
+    print(f"Pasajeros Predichos: {y_pred[0]:,.0f}")
+    print(f"MAE: {mae:,.0f}")
+    # Fecha real: 2024-12-31
+    # Pasajeros reales: 36,751
+    # Pasajeros predichos: 42,875
+    # MAE: 9,602
