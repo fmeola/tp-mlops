@@ -272,3 +272,205 @@ with mlflow.start_run():
     # Pasajeros reales: 36,751
     # Pasajeros predichos: 42,875
     # MAE: 9,602
+
+
+# Experimento 4: Predicción de Pasajeros Internacionales con Variables Rezagadas y Evaluación en el Futuro (3 meses)
+
+# En este experimento se predice la cantidad diaria de pasajeros en vuelos internacionales
+# Se utilizan variables rezagadas (lags): pasajeros del día anterior, de hace una semana y la media móvil de los últimos 7 días.
+# Se evalua el modelo sobre los últimos 3 meses del dataset.
+
+import pandas as pd
+
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_experiment("Pasajeros Internacionales - Variables Rezagadas")
+
+with mlflow.start_run():
+    # 1. Filtrado y orden temporal
+    data = dataset.copy()
+    data = data[data['clasificacion_vuelo'] == 'Internacional'].reset_index(drop=True)
+    
+    # 2. Features de calendario
+    data['day_of_week'] = data['indice_tiempo'].dt.dayofweek
+    data['is_weekend'] = data['day_of_week'].isin([5, 6]).astype(int)
+
+    # 3. Variables rezagadas
+    data['pasajeros_lag_1'] = data['pasajeros'].shift(1)
+    data['pasajeros_lag_7'] = data['pasajeros'].shift(7)
+    data['media_movil_7'] = data['pasajeros'].rolling(window=7).mean()
+
+    # 4. Limpieza: eliminamos los primeros días sin datos válidos por el shift/rolling
+    data = data.dropna().reset_index(drop=True)
+
+    # 5. División Train/Test temporal (últimos 3 meses)
+    fecha_corte_test = data['indice_tiempo'].max() - pd.DateOffset(months=3)
+    train = data[data['indice_tiempo'] < fecha_corte_test]
+    test = data[data['indice_tiempo'] >= fecha_corte_test]
+
+    # 6. Definición de features y target
+    features = ['day_of_week', 'is_weekend','asientos', 'vuelos','pasajeros_lag_1', 'pasajeros_lag_7', 'media_movil_7']
+    target = 'pasajeros'
+
+    X_train = train[features].astype('float64')
+    y_train = train[target]
+    X_test = test[features].astype('float64')
+    y_test = test[target]
+
+    # 7. Entrenamiento y predicción
+    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    # 8. Métricas
+    mae = sklearn.metrics.mean_absolute_error(y_test, y_pred)
+    r2 = sklearn.metrics.r2_score(y_test, y_pred)
+
+    # 9. Logging con MLflow
+    mlflow.log_params({
+        "model_type": "RandomForestRegressor",
+        "n_estimators": model.n_estimators,
+        "features_used": str(features),
+        "train_size": len(X_train),
+        "test_size": len(X_test),
+        "fecha_inicio_train": train['indice_tiempo'].min().date().isoformat(),
+        "fecha_fin_test": test['indice_tiempo'].max().date().isoformat()
+    })
+    mlflow.log_metrics({
+        "mae": mae,
+        "r2_score": r2
+    })
+    mlflow.set_tags({
+        "feature_engineering": "lag_variables",
+        "target_variable": "pasajeros",
+        "data_split": "últimos_3_meses"
+    })
+
+    # 10. Registro del modelo
+    from mlflow.models.signature import infer_signature
+    signature = infer_signature(X_train, model.predict(X_train))
+    input_example = X_train.iloc[:5]
+    mlflow.sklearn.log_model(
+        sk_model=model,
+        artifact_path="modelo_rf_lags",
+        input_example=input_example,
+        signature=signature
+    )
+    model_uri = f"runs:/{mlflow.active_run().info.run_id}/modelo_rf_lags"
+    mlflow.register_model(model_uri, "modelo_rf_lags")
+
+    # 11. Resultados impresos
+    print(f"Fecha inicio test: {test['indice_tiempo'].min().date()}")
+    print(f"Fecha fin test: {test['indice_tiempo'].max().date()}")
+    print(f"MAE: {mae:,.0f}")
+    print(f"R2: {r2:.2f}")
+    print(f"Primer día real: {y_test.iloc[0]:,.0f}")
+    print(f"Primer día predicho: {y_pred[0]:,.0f}")
+
+
+# Experimento 5: Predicción de Pasajeros Internacionales con Lags de Pasajeros + Asientos/Vuelos/Lags
+#
+# Este experimento combina las variables rezagadas de pasajeros (como en el experimento 4)
+# con variables operativas (`asientos`, `vuelos`), su derivada `asientos_promedio_por_vuelo`
+# y sus respectivos lags. Se evalúa en los últimos 3 meses del dataset.
+
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_experiment("Pasajeros Internacionales - Lags + Asientos/Vuelos")
+
+with mlflow.start_run():
+    data = dataset.copy()
+    data = data[data['clasificacion_vuelo'] == 'Internacional'].reset_index(drop=True)
+
+    # Filtrado para evitar divisiones por cero
+    data = data[data['vuelos'] != 0]
+
+    # Variables derivadas
+    data['asientos_promedio_por_vuelo'] = data['asientos'] / data['vuelos']
+
+    # Features de calendario
+    data['day_of_week'] = data['indice_tiempo'].dt.dayofweek
+    data['is_weekend'] = data['day_of_week'].isin([5, 6]).astype(int)
+
+    # Lags de pasajeros
+    data['pasajeros_lag_1'] = data['pasajeros'].shift(1)
+    data['pasajeros_lag_7'] = data['pasajeros'].shift(7)
+    data['media_movil_7'] = data['pasajeros'].rolling(7).mean()
+
+    # Lags de variables operativas
+    data['asientos_lag_1'] = data['asientos'].shift(1)
+    data['vuelos_lag_1'] = data['vuelos'].shift(1)
+    data['asientos_promedio_lag_1'] = data['asientos_promedio_por_vuelo'].shift(1)
+
+    # Limpieza
+    data = data.dropna().reset_index(drop=True)
+
+    # División temporal
+    fecha_corte_test = data['indice_tiempo'].max() - pd.DateOffset(months=3)
+    train = data[data['indice_tiempo'] < fecha_corte_test]
+    test = data[data['indice_tiempo'] >= fecha_corte_test]
+
+    # Features usadas
+    features = [
+        'day_of_week', 'is_weekend',
+        'pasajeros_lag_1', 'pasajeros_lag_7', 'media_movil_7',
+        'asientos', 'vuelos', 'asientos_promedio_por_vuelo',
+        'asientos_lag_1', 'vuelos_lag_1', 'asientos_promedio_lag_1'
+    ]
+    target = 'pasajeros'
+
+    X_train = train[features].astype('float64')
+    y_train = train[target]
+    X_test = test[features].astype('float64')
+    y_test = test[target]
+
+    # Modelo
+    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    # Métricas
+    from sklearn.metrics import mean_absolute_error, r2_score
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    # MLflow
+    mlflow.log_params({
+        "model_type": "RandomForestRegressor",
+        "n_estimators": model.n_estimators,
+        "features_used": str(features),
+        "train_size": len(X_train),
+        "test_size": len(X_test),
+        "fecha_inicio_train": train['indice_tiempo'].min().date().isoformat(),
+        "fecha_fin_test": test['indice_tiempo'].max().date().isoformat()
+    })
+    mlflow.log_metrics({
+        "mae": mae,
+        "r2_score": r2
+    })
+    mlflow.set_tags({
+        "feature_engineering": "pasajeros_lags + asientos/vuelos",
+        "target_variable": "pasajeros",
+        "data_split": "últimos_3_meses"
+    })
+
+    # Registro del modelo
+    from mlflow.models.signature import infer_signature
+    signature = infer_signature(X_train, model.predict(X_train))
+    input_example = X_train.iloc[:5]
+    mlflow.sklearn.log_model(
+        sk_model=model,
+        artifact_path="modelo_rf_lags_operativos",
+        input_example=input_example,
+        signature=signature
+    )
+    model_uri = f"runs:/{mlflow.active_run().info.run_id}/modelo_rf_lags_operativos"
+    mlflow.register_model(model_uri, "modelo_rf_lags_operativos")
+
+    # Resultados
+    print(f"Fecha inicio test: {test['indice_tiempo'].min().date()}")
+    print(f"Fecha fin test: {test['indice_tiempo'].max().date()}")
+    print(f"MAE: {mae:,.0f}")
+    print(f"R2: {r2:.2f}")
+    print(f"Primer día real: {y_test.iloc[0]:,.0f}")
+    print(f"Primer día predicho: {y_pred[0]:,.0f}")
