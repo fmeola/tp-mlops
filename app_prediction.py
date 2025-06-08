@@ -1,6 +1,7 @@
 # %%
 # App que levanta mlflow y el deploy de fastapi
 
+import os
 import subprocess
 import threading
 
@@ -9,24 +10,50 @@ import mlflow
 import pandas
 import uvicorn
 
-def obtener_mejor_modelo():
-    # Configuración MLFlow
-    mlflow.set_tracking_uri("http://127.0.0.1:5000")
+# Configuración MLFlow
+URI = 'http://127.0.0.1:5000'
+
+# Predicción A: Pasajeros internacionales del día 31/03/2025
+INTERNATIONAL_PASSENGERS_MODEL = 'pasajeros_internacionales_dia'
+
+def obtener_mejor_modelo(model_name):
+    mlflow.set_tracking_uri(URI)
     client = mlflow.tracking.MlflowClient()
-    # Obtener todas las corridas del experimento
-    experiment = client.get_experiment_by_name("Pasajeros Internacionales")
-    runs = client.search_runs(
-        experiment_ids=[experiment.experiment_id],
-        order_by=["metrics.mae ASC"],
-        max_results=20
-    )
-    # Filtrar las corridas que tienen mae
-    runs_with_mae = [run for run in runs if "mae" in run.data.metrics]
-    # Tomar la mejor corrida (por menor MAE)
-    best_run = sorted(runs_with_mae, key=lambda r: r.data.metrics["mae"])[0]
-    model_uri = f"runs:/{best_run.info.run_id}/modelo_regresion_dia"
+    # Obtener todas las versiones del modelo
+    versions = client.get_latest_versions(name=model_name, stages=["None", "Staging", "Production"])
+    best_run = None
+    best_mae = float("inf")
+    for v in versions:
+        run = client.get_run(v.run_id)
+        if "mae" in run.data.metrics:
+            mae = run.data.metrics["mae"]
+            if mae < best_mae:
+                best_mae = mae
+                best_run = run
+    if not best_run:
+        raise Exception("No hay versiones del modelo con la métrica 'mae' registrada")
+    model_uri = f"runs:/{best_run.info.run_id}/{model_name}"
     model = mlflow.pyfunc.load_model(model_uri)
     return model, best_run
+
+def construir_features(fecha_objetivo, run, features):
+    # Fecha de inicio registrada en el experimento
+    fecha_inicio = pandas.to_datetime(run.data.params.get("fecha_inicio", "2017-01-01"))
+    # Variables temporales calculadas desde la fecha
+    datos = {
+        # Experimento 1
+        "dias_desde_inicio": (fecha_objetivo - fecha_inicio).days,
+        # Experimento 2
+        "year": fecha_objetivo.year,
+        "month": fecha_objetivo.month,
+        "day_of_week": fecha_objetivo.dayofweek,
+        "day_of_year": fecha_objetivo.dayofyear,
+        "week_of_year": fecha_objetivo.isocalendar().week
+    }
+    # Filtrar solo las que requiere el modelo
+    datos_filtrados = {k: datos[k] for k in features if k in datos}
+    # Devolver DataFrame con una sola fila
+    return pandas.DataFrame([datos_filtrados]).astype("float64")
 
 app = fastapi.FastAPI(title = 'Pasajeros Internacionales')
 
@@ -34,22 +61,32 @@ app = fastapi.FastAPI(title = 'Pasajeros Internacionales')
 def health():
     return {"status": "ok"}
 
-@app.get("/predict")
-def predict():
+@app.get("/pasajeros_internacionales")
+def predict(fecha: str = "2025-03-31"):
     try:
+        # Parsear la fecha objetivo
+        fecha_objetivo = pandas.to_datetime(fecha)
         # Obtener el mejor modelo y corrida
-        model, run = obtener_mejor_modelo()
-        # Obtener dias_desde_inicio_prediccion de la corrida
-        dias_desde_inicio = int(run.data.params["dias_desde_inicio_prediccion"])
+        model, run = obtener_mejor_modelo(INTERNATIONAL_PASSENGERS_MODEL)
+        # Obtener el nombre de las features usadas
+        features_used = eval(run.data.params.get("features_used"))
+        # Construir DataFrame de entrada según las features del modelo
+        df = construir_features(fecha_objetivo, run, features_used)
         # Predicción con el mejor modelo
-        df = pandas.DataFrame([[dias_desde_inicio]], columns=["dias_desde_inicio"]).astype('float64')
         prediction = model.predict(df).tolist()
         # Respuesta
         return {
+            "modelo_usado": run.info.run_id,
+            "features": features_used,
+            "fecha": fecha_objetivo.date().isoformat(),
             "pasajeros_predichos": f"{prediction[0]:,.0f}"
         }
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/", response_class=fastapi.responses.FileResponse)
+def serve_index():
+    return fastapi.responses.FileResponse(os.path.join("templates", "index.html"))
 
 if __name__ == "__main__":
     def start_mlflow():

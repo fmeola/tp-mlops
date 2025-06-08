@@ -4,7 +4,6 @@ import mlflow
 import pandas
 import sklearn
 from sklearn.ensemble import RandomForestRegressor
-import numpy as np
 
 def read_data(name):
     df = pandas.read_csv(
@@ -30,17 +29,19 @@ print(dataset.dtypes)
 print(dataset.head())
 
 # %%
-# Experimento 1: Predecir la cantidad de pasajeros de vuelos internacionales
-#
-# ⚠️
-# Por ahora dato fijo, una sola predicción para un día en particular
-# Ejemplo: 31/03/2025
+# Configuración mlflow
+URI = 'http://127.0.0.1:5000'
+mlflow.set_tracking_uri(URI)
+
+# %%
+# Predicción A: Pasajeros internacionales del día 31/03/2025
+INTERNATIONAL_PASSENGERS_MODEL = 'pasajeros_internacionales_dia'
 fecha_objetivo = pandas.to_datetime("2025-03-31")
-# ⚠️
-#
-# Configuración MLFlow
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
-mlflow.set_experiment("Pasajeros Internacionales")
+
+# %%
+# Experimento 1 (Predicción A)
+# Predecir la cantidad de pasajeros de vuelos internacionales con feature dias desde inicio
+mlflow.set_experiment("Pasajeros Internacionales - Días desde inicio")
 with mlflow.start_run():
     data = dataset.copy()
     # Nos quedamos únicamente con los vuelos internacionales
@@ -62,6 +63,9 @@ with mlflow.start_run():
     y_pred = model.predict(X_test)
     # Log de parámetros y métricas
     mae = sklearn.metrics.mean_absolute_error(y_test, y_pred)
+    # Features usadas: días de inicio
+    features = ['dias_desde_inicio'] # Nueva feature
+    mlflow.log_param("features_used", str(features))
     mlflow.log_param("model_type", "LinearRegression")
     mlflow.log_param("train_size", len(X_train))
     mlflow.log_param("fecha_objetivo", fecha_objetivo.date().isoformat())
@@ -84,13 +88,13 @@ with mlflow.start_run():
     input_example = X_train.iloc[:5]
     mlflow.sklearn.log_model(
         sk_model=model,
-        artifact_path="modelo_regresion_dia",
+        artifact_path=INTERNATIONAL_PASSENGERS_MODEL,
         input_example=input_example,
         signature=signature
     )
     # Registro del modelo
-    model_uri = f"runs:/{mlflow.active_run().info.run_id}/modelo_regresion_dia"
-    result = mlflow.register_model(model_uri, "modelo_regresion_dia")
+    model_uri = f"runs:/{mlflow.active_run().info.run_id}/{INTERNATIONAL_PASSENGERS_MODEL}"
+    result = mlflow.register_model(model_uri, INTERNATIONAL_PASSENGERS_MODEL)
     # Impresión de resultados obtenidos
     print(f"Fecha real: {pandas.to_datetime(test['indice_tiempo'].values[0]).date()}")
     print(f"Pasajeros reales: {y_test.values[0]:,.0f}")
@@ -101,12 +105,10 @@ with mlflow.start_run():
     # Pasajeros predichos: 24,728
     # MAE: 19,314
 
-# Experimento 2: Predicción de Pasajeros Internacionales con Features de Tiempo y Evaluación en el Futuro
-
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
-mlflow.set_experiment("Pasajeros Internacionales - Series de Tiempo")
-
 # %%
+# Experimento 2 (Predicción A)
+# Predicción de Pasajeros Internacionales con Features de Tiempo y Evaluación en el Futuro
+mlflow.set_experiment("Pasajeros Internacionales - Series de Tiempo")
 with mlflow.start_run():
     data = dataset.copy()
     data = data[data['clasificacion_vuelo'] == 'Internacional']
@@ -120,7 +122,7 @@ with mlflow.start_run():
     data['week_of_year'] = data['indice_tiempo'].dt.isocalendar().week.astype(int)
 
     # 2. División Train/Test para Series de Tiempo
-    fecha_corte_test = pandas.to_datetime("2025-03-31") # Fecha fija para test
+    fecha_corte_test = fecha_objetivo # Fecha fija para test
 
     train = data[data['indice_tiempo'] < fecha_corte_test]
     test = data[data['indice_tiempo'] == fecha_corte_test]
@@ -170,12 +172,12 @@ with mlflow.start_run():
     input_example = X_train.iloc[:5]
     mlflow.sklearn.log_model(
         sk_model=model,
-        artifact_path="modelo_rf_dia",
+        artifact_path=INTERNATIONAL_PASSENGERS_MODEL,
         input_example=input_example,
         signature=signature
     )
-    model_uri = f"runs:/{mlflow.active_run().info.run_id}/modelo_rf_dia"
-    result = mlflow.register_model(model_uri, "modelo_rf_dia")
+    model_uri = f"runs:/{mlflow.active_run().info.run_id}/{INTERNATIONAL_PASSENGERS_MODEL}"
+    result = mlflow.register_model(model_uri, INTERNATIONAL_PASSENGERS_MODEL)
 
     # Impresión de resultados
     print(f"Fecha real: {test['indice_tiempo'].iloc[0].date()}")
@@ -187,12 +189,9 @@ with mlflow.start_run():
     # Pasajeros predichos: 44,404
     # MAE: 362
 
-# Experimento 3: Predicción de Pasajeros Internacionales con Features de Tiempo y Evaluación en el Futuro (3 meses)
-
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
-mlflow.set_experiment("Pasajeros Internacionales - Series de Tiempo (3 meses)")
-
 # %%
+# Experimento 3: Predicción de Pasajeros Internacionales con Features de Tiempo y Evaluación en el Futuro (3 meses)
+mlflow.set_experiment("Pasajeros Internacionales - Series de Tiempo (3 meses)")
 with mlflow.start_run():
     data = dataset.copy()
     data = data[data['clasificacion_vuelo'] == 'Internacional']
@@ -273,19 +272,12 @@ with mlflow.start_run():
     # Pasajeros predichos: 42,875
     # MAE: 9,602
 
-
+# %%
 # Experimento 4: Predicción de Pasajeros Internacionales con Variables Rezagadas y Evaluación en el Futuro (3 meses)
-
 # En este experimento se predice la cantidad diaria de pasajeros en vuelos internacionales
 # Se utilizan variables rezagadas (lags): pasajeros del día anterior, de hace una semana y la media móvil de los últimos 7 días.
 # Se evalua el modelo sobre los últimos 3 meses del dataset.
-
-import pandas as pd
-
-
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
 mlflow.set_experiment("Pasajeros Internacionales - Variables Rezagadas")
-
 with mlflow.start_run():
     # 1. Filtrado y orden temporal
     data = dataset.copy()
@@ -304,7 +296,7 @@ with mlflow.start_run():
     data = data.dropna().reset_index(drop=True)
 
     # 5. División Train/Test temporal (últimos 3 meses)
-    fecha_corte_test = data['indice_tiempo'].max() - pd.DateOffset(months=3)
+    fecha_corte_test = data['indice_tiempo'].max() - pandas.DateOffset(months=3)
     train = data[data['indice_tiempo'] < fecha_corte_test]
     test = data[data['indice_tiempo'] >= fecha_corte_test]
 
@@ -367,17 +359,13 @@ with mlflow.start_run():
     print(f"Primer día real: {y_test.iloc[0]:,.0f}")
     print(f"Primer día predicho: {y_pred[0]:,.0f}")
 
-
+# %%
 # Experimento 5: Predicción de Pasajeros Internacionales con Lags de Pasajeros + Asientos/Vuelos/Lags
 #
 # Este experimento combina las variables rezagadas de pasajeros (como en el experimento 4)
 # con variables operativas (`asientos`, `vuelos`), su derivada `asientos_promedio_por_vuelo`
 # y sus respectivos lags. Se evalúa en los últimos 3 meses del dataset.
-
-
-mlflow.set_tracking_uri("http://127.0.0.1:5000")
 mlflow.set_experiment("Pasajeros Internacionales - Lags + Asientos/Vuelos")
-
 with mlflow.start_run():
     data = dataset.copy()
     data = data[data['clasificacion_vuelo'] == 'Internacional'].reset_index(drop=True)
@@ -406,7 +394,7 @@ with mlflow.start_run():
     data = data.dropna().reset_index(drop=True)
 
     # División temporal
-    fecha_corte_test = data['indice_tiempo'].max() - pd.DateOffset(months=3)
+    fecha_corte_test = data['indice_tiempo'].max() - pandas.DateOffset(months=3)
     train = data[data['indice_tiempo'] < fecha_corte_test]
     test = data[data['indice_tiempo'] >= fecha_corte_test]
 

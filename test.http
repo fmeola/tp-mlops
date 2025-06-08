@@ -9,4 +9,4 @@ GET 127.0.0.1:8000/health
 %}
 
 ###
-GET 127.0.0.1:8000/predict
+GET 127.0.0.1:8000/pasajeros_internacionales?fecha=2025-03-31
