@@ -9,6 +9,23 @@
 - Izzo Paula Ruth
 - Meola Franco Román
 
+## Dataset: Conectividad Aérea
+### Vuelos, asientos y pasajeros por día según clasificación de vuelo
+
+- **Fuente**: SINTA (Sistema de Información Turística de la Argentina) 
+https://datos.yvera.gob.ar/dataset/conectividad-aerea
+- **Previsualización**:
+https://datos.yvera.gob.ar/dataset/conectividad-aerea/archivo/03b4176f-a065-450a-b411-101d2a884720
+- **Campos**:
+
+| Campo                 | Tipo           | Descripción             |
+|-----------------------|----------------|-------------------------|
+| `indice_tiempo`       | Fecha ISO-8601 | Indice de tiempo diario |
+| `clasificacion_vuelo` | String         | Tipo de conexión        |
+| `pasajeros`           | Number         | Cantidad de pasajeros   |
+| `asientos`            | Number         | Cantidad de asientos    |
+| `vuelos`              | Number         | Cantidad de vuelos      |
+
 ## Instrucciones para la ejecución del ambiente y los experimentos
 
 1. Ejecutar `app_prediction.py` para iniciar mlflow y fastapi
