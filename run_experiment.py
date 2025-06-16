@@ -462,3 +462,237 @@ with mlflow.start_run():
     print(f"R2: {r2:.2f}")
     print(f"Primer día real: {y_test.iloc[0]:,.0f}")
     print(f"Primer día predicho: {y_pred[0]:,.0f}")
+
+
+
+ # %%
+import mlflow
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
+from mlflow.models.signature import infer_signature
+from xgboost import XGBRegressor
+
+# Cargar dataset y filtrar
+data = dataset.copy()
+data = data[data['clasificacion_vuelo'] == 'Internacional'].reset_index(drop=True)
+
+# =====================
+# Feriados de Argentina (pueden ampliarse)
+# =====================
+feriados_arg = pd.to_datetime([
+    "2024-01-01", "2024-02-12", "2024-02-13", "2024-03-24", "2024-03-29", "2024-04-02",
+    "2024-05-01", "2024-05-25", "2024-06-17", "2024-06-20", "2024-07-09", "2024-08-19",
+    "2024-10-14", "2024-11-18", "2024-12-08", "2024-12-25",
+    "2025-01-01", "2025-02-24", "2025-02-25", "2025-03-24", "2025-04-18", "2025-04-02",
+    "2025-05-01", "2025-05-25", "2025-06-20", "2025-07-09", "2025-08-18",
+    "2025-10-13", "2025-11-17", "2025-12-08", "2025-12-25"
+])
+
+# Features de calendario
+data['es_feriado'] = data['indice_tiempo'].isin(feriados_arg).astype(int)
+data['day_of_week'] = data['indice_tiempo'].dt.dayofweek
+data['is_weekend'] = data['day_of_week'].isin([5, 6]).astype(int)
+data['finde_largo'] = 0
+
+# Findes largos (si hay feriado lunes o viernes)
+for fecha in feriados_arg:
+    if fecha.weekday() == 0:  # lunes
+        for offset in [-2, -1, 0]:
+            dia = fecha + pd.Timedelta(days=offset)
+            data.loc[data['indice_tiempo'] == dia, 'finde_largo'] = 1
+    elif fecha.weekday() == 4:  # viernes
+        for offset in [0, 1, 2]:
+            dia = fecha + pd.Timedelta(days=offset)
+            data.loc[data['indice_tiempo'] == dia, 'finde_largo'] = 1
+
+# División train/test (últimos 3 meses)
+fecha_corte_test = data['indice_tiempo'].max() - pd.DateOffset(months=3)
+train = data[data['indice_tiempo'] < fecha_corte_test]
+test = data[data['indice_tiempo'] >= fecha_corte_test]
+
+# Features y target
+features = ['day_of_week', 'is_weekend', 'es_feriado', 'finde_largo', 'asientos', 'vuelos']
+target = 'pasajeros'
+
+X_train = train[features].astype('float64')
+y_train = train[target]
+X_test = test[features].astype('float64')
+y_test = test[target]
+
+# =====================
+# Entrenamiento y log de 3 modelos
+# =====================
+mlflow.set_experiment("Comparación de Modelos - Feriados ARG")
+modelos = {
+    "LinearRegression": LinearRegression(),
+    "RandomForestRegressor": RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
+    "XGBRegressor": XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+}
+
+for nombre_modelo, modelo in modelos.items():
+    with mlflow.start_run(run_name=nombre_modelo):
+        modelo.fit(X_train, y_train)
+        y_pred = modelo.predict(X_test)
+
+        mae = mean_absolute_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
+
+        # Log en MLflow
+        mlflow.log_param("model_type", nombre_modelo)
+        mlflow.log_param("features_used", str(features))
+        mlflow.log_param("train_size", len(X_train))
+        mlflow.log_param("test_size", len(X_test))
+        mlflow.log_metric("mae", mae)
+        mlflow.log_metric("r2_score", r2)
+
+        mlflow.set_tags({
+            "feature_engineering": "feriados_argentinos",
+            "target_variable": "pasajeros",
+            "data_split": "últimos_3_meses"
+        })
+
+        signature = infer_signature(X_train, modelo.predict(X_train))
+        input_example = X_train.iloc[:5]
+        mlflow.sklearn.log_model(
+            sk_model=modelo,
+            artifact_path=f"modelo_{nombre_modelo.lower()}",
+            input_example=input_example,
+            signature=signature
+        )
+
+        print(f"Modelo: {nombre_modelo}")
+        print(f"MAE: {mae:,.0f}")
+        print(f"R2: {r2:.2f}")
+        print(f"Primer día real: {y_test.iloc[0]:,.0f}")
+        print(f"Primer día predicho: {y_pred[0]:,.0f}")
+        print("-" * 40)
+
+
+
+##forecasting_multisalida.py##
+
+
+import pandas as pd
+import numpy as np
+import mlflow
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
+from mlflow.models.signature import infer_signature
+import matplotlib.pyplot as plt
+
+# =========================
+# 1. Cargar y preparar dataset
+# =========================
+df = pd.read_csv('data/vuelos_asientos_pasajeros.csv', parse_dates=['indice_tiempo'])
+df = df[df['clasificacion_vuelo'] == 'Internacional'].sort_values('indice_tiempo').reset_index(drop=True)
+
+# Feriados ARG 2024–2025
+feriados_arg = pd.to_datetime([
+    "2024-01-01", "2024-02-12", "2024-02-13", "2024-03-24", "2024-03-29", "2024-04-02",
+    "2024-05-01", "2024-05-25", "2024-06-17", "2024-06-20", "2024-07-09", "2024-08-19",
+    "2024-10-14", "2024-11-18", "2024-12-08", "2024-12-25",
+    "2025-01-01", "2025-02-24", "2025-02-25", "2025-03-24", "2025-04-18", "2025-04-02",
+    "2025-05-01", "2025-05-25", "2025-06-20", "2025-07-09", "2025-08-18",
+    "2025-10-13", "2025-11-17", "2025-12-08", "2025-12-25"
+])
+
+# =========================
+# 2. Features de calendario
+# =========================
+df['day_of_week'] = df['indice_tiempo'].dt.dayofweek
+df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+df['es_feriado'] = df['indice_tiempo'].isin(feriados_arg).astype(int)
+df['finde_largo'] = 0
+
+for fecha in feriados_arg:
+    if fecha.weekday() == 0:
+        for offset in [-2, -1, 0]:
+            dia = fecha + pd.Timedelta(days=offset)
+            df.loc[df['indice_tiempo'] == dia, 'finde_largo'] = 1
+    elif fecha.weekday() == 4:
+        for offset in [0, 1, 2]:
+            dia = fecha + pd.Timedelta(days=offset)
+            df.loc[df['indice_tiempo'] == dia, 'finde_largo'] = 1
+
+# =========================
+# 3. Crear ventanas móviles
+# =========================
+window_size = 14
+horizon = 7
+features = ['day_of_week', 'is_weekend', 'es_feriado', 'finde_largo']
+
+X, y = [], []
+for i in range(len(df) - window_size - horizon):
+    pasados = df['pasajeros'].iloc[i:i+window_size].values
+    futuros = df['pasajeros'].iloc[i+window_size:i+window_size+horizon].values
+    info_dias = df[features].iloc[i+window_size:i+window_size+horizon].values.flatten()
+    X.append(np.concatenate([pasados, info_dias]))
+    y.append(futuros)
+
+X = np.array(X)
+y = np.array(y)
+
+# =========================
+# 4. División entre entrenamiento y testeo
+# =========================
+test_size = 90
+X_train, y_train = X[:-test_size], y[:-test_size]
+X_test, y_test = X[-test_size:], y[-test_size:]
+
+# =========================
+# 5. Entrenar y registrar modelos en MLflow
+# =========================
+mlflow.set_experiment("Forecasting 7 días - Modelo Multisalida")
+
+modelos = {
+    "LinearRegression": MultiOutputRegressor(LinearRegression()),
+    "RandomForestRegressor": MultiOutputRegressor(RandomForestRegressor(n_estimators=100, random_state=42))
+}
+
+for nombre, modelo in modelos.items():
+    with mlflow.start_run(run_name=nombre):
+        modelo.fit(X_train, y_train)
+        y_pred = modelo.predict(X_test)
+        mae = mean_absolute_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
+
+        mlflow.log_param("model_type", nombre)
+        mlflow.log_param("window_size", window_size)
+        mlflow.log_param("horizon", horizon)
+        mlflow.log_metric("mae", mae)
+        mlflow.log_metric("r2_score", r2)
+
+        signature = infer_signature(X_train, modelo.predict(X_train))
+        mlflow.sklearn.log_model(
+            sk_model=modelo,
+            artifact_path=f"modelo_multisalida_{nombre.lower()}",
+            input_example=X_train[:5],
+            signature=signature
+        )
+
+        print(f"Modelo: {nombre}")
+        print(f"MAE total: {mae:,.0f}")
+        print(f"R² total: {r2:.2f}")
+        print("-" * 40)
+
+# =========================
+# 6. Gráfico de error por día de horizonte
+# =========================
+plt.figure(figsize=(12, 6))
+for nombre in modelos:
+    modelo = modelos[nombre]
+    y_pred = modelo.predict(X_test)
+    error_por_dia = np.mean(np.abs(y_test - y_pred), axis=0)
+    plt.plot(range(1, 8), error_por_dia, label=nombre)
+
+plt.title("Error absoluto medio por día (Modelo Multisalida)")
+plt.xlabel("Día hacia adelante")
+plt.ylabel("MAE por día")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
